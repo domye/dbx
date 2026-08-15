@@ -5691,6 +5691,8 @@ export default withEnglishFallback({
     themePaletteClaude: "Claude Code",
     themePaletteCustom: "自定义",
     customUiReset: "恢复默认",
+    customUiEditingLight: "正在编辑：浅色配色",
+    customUiEditingDark: "正在编辑：深色配色",
     customUiBackground: "背景",
     customUiForeground: "前景文字",
     customUiPrimary: "主色",

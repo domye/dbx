@@ -100,7 +100,7 @@ import {
   type QueryEditorTableReferencePayload,
 } from "@/lib/editor/queryEditorTableDrop";
 import type { SqlHighlighter } from "@/lib/sql/sqlHighlighter";
-import { EDITOR_FONT_FAMILY_CSS_VAR, EDITOR_FONT_SIZE_CSS_VAR, loadEditorTheme, editorFontTheme, sqlCompletionTheme, sqlSemanticHighlightTheme } from "@/lib/editor/editorThemes";
+import { EDITOR_FONT_FAMILY_CSS_VAR, EDITOR_FONT_SIZE_CSS_VAR, editorThemeAppearanceFor, loadEditorTheme, editorFontTheme, sqlCompletionTheme, sqlSemanticHighlightTheme } from "@/lib/editor/editorThemes";
 import { createStatementGutterMarkerDom, shouldShowStatementGutter } from "@/lib/editor/codemirrorStatementGutter";
 import { createQueryEditorSearchKeymap } from "@/lib/editor/queryEditorSearchKeymap";
 import { appendSqlCompletionSpace } from "@/lib/editor/sqlCompletionInsertion";
@@ -223,7 +223,7 @@ function sqlStatementParameterOptions() {
   const toggles = resolveSqlVariableSyntaxToggles(settingsStore.editorSettings.sqlVariableSyntaxOverrides, props.databaseType, settingsStore.editorSettings.sqlVariableSubstitutionEnabled);
   return { databaseType: props.databaseType, enabledSyntaxes: enabledSqlParameterSyntaxes(toggles) };
 }
-const { isDark, themePalette } = useTheme();
+const { isDark, themePalette, activeCustomUiColors } = useTheme();
 const { t } = useI18n();
 const { toast } = useToast();
 const snippetDatabaseType = computed(() => {
@@ -592,7 +592,7 @@ const tableNavigationHoverClass = "query-editor--table-navigation-hover";
 const DBX_VIM_SAVE_EVENT = "dbx-vim-save";
 
 function editorThemeAppearance() {
-  return isDark.value ? "dark" : "light";
+  return editorThemeAppearanceFor(isDark.value ? "dark" : "light", themePalette.value, themePalette.value === "custom" ? activeCustomUiColors.value : undefined);
 }
 
 // Completion cache

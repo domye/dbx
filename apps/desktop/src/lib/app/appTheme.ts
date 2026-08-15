@@ -3,6 +3,7 @@ import type { Theme } from "@tauri-apps/api/window";
 export const APP_THEME_STORAGE_KEY = "dbx-theme";
 export const APP_THEME_PALETTE_STORAGE_KEY = "dbx-theme-palette";
 export const APP_CUSTOM_UI_STORAGE_KEY = "dbx-theme-custom-ui";
+export const APP_CUSTOM_UI_DARK_STORAGE_KEY = "dbx-theme-custom-ui-dark";
 export const APP_CORNER_STYLE_STORAGE_KEY = "dbx-corner-style";
 
 export type AppThemeMode = "light" | "dark" | "system";
@@ -24,6 +25,14 @@ export const DEFAULT_APP_CUSTOM_UI_COLORS: AppCustomUiColors = {
   primary: "#171717",
   border: "#e5e5e5",
   sidebar: "#fafafa",
+};
+
+export const DEFAULT_APP_CUSTOM_UI_COLORS_DARK: AppCustomUiColors = {
+  background: "#131416",
+  foreground: "#d7d7db",
+  primary: "#d0d0d6",
+  border: "#6e6e72",
+  sidebar: "#19191c",
 };
 
 export interface AppCustomUiColorDef {
@@ -124,6 +133,36 @@ export function appCustomUiColorValue(hex: string): { color: string; rgbTriplet:
   const g = parseInt(value.slice(2, 4), 16);
   const b = parseInt(value.slice(4, 6), 16);
   return { color: `rgb(${r} ${g} ${b})`, rgbTriplet: `${r}, ${g}, ${b}` };
+}
+
+/** WCAG 2.x relative luminance of a #rrggbb color, 0 (black) .. 1 (white). */
+export function hexRelativeLuminance(hex: string): number {
+  const value = hex.replace("#", "");
+  const toLinear = (channel: string): number => {
+    const c = parseInt(channel, 16) / 255;
+    return c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4);
+  };
+  const r = toLinear(value.slice(0, 2));
+  const g = toLinear(value.slice(2, 4));
+  const b = toLinear(value.slice(4, 6));
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+}
+
+/** WCAG 2.x contrast ratio between two #rrggbb colors, 1 .. 21. */
+export function wcagContrastRatio(a: string, b: string): number {
+  const lighter = Math.max(hexRelativeLuminance(a), hexRelativeLuminance(b));
+  const darker = Math.min(hexRelativeLuminance(a), hexRelativeLuminance(b));
+  return (lighter + 0.05) / (darker + 0.05);
+}
+
+/**
+ * Decides the effective light/dark appearance for a custom UI palette from the
+ * chosen background's luminance, so surfaces driven by the app palette (such as
+ * the "Follow app theme" editor) stay readable no matter how dark or light the
+ * background is.
+ */
+export function customUiAppearance(colors: AppCustomUiColors): AppThemeAppearance {
+  return hexRelativeLuminance(colors.background) < 0.2 ? "dark" : "light";
 }
 
 export function normalizeAppCornerStyle(value: string | null): AppCornerStyle {

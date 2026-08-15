@@ -152,10 +152,10 @@ const connectionStore = useConnectionStore();
 const savedSqlStore = useSavedSqlStore();
 const promptTemplateStore = usePromptTemplateStore();
 const tunnelProfileStore = useTunnelProfileStore();
-const { isDark, themeMode, themePalette, customUiColors, cornerStyle, setThemeMode, setThemePalette, setCustomUiColors, resetCustomUiColors, setCornerStyle } = useTheme();
+const { isDark, themeMode, themePalette, activeCustomUiColors, cornerStyle, setThemeMode, setThemePalette, setCustomUiColors, resetCustomUiColors, setCornerStyle } = useTheme();
 
 function updateCustomUiColor(key: keyof AppCustomUiColors, value: string) {
-  setCustomUiColors({ ...customUiColors.value, [key]: value });
+  setCustomUiColors({ ...activeCustomUiColors.value, [key]: value });
 }
 
 const appThemePaletteOptions = computed(
@@ -4221,10 +4221,15 @@ onUnmounted(() => {
                 </div>
 
                 <template v-if="themePalette === 'custom'">
+                  <div class="settings-appearance-field min-w-0">
+                    <div class="flex h-9 items-center gap-1">
+                      <Label class="truncate text-xs text-muted-foreground">{{ isDark ? t("settings.customUiEditingDark") : t("settings.customUiEditingLight") }}</Label>
+                    </div>
+                  </div>
                   <div v-for="def in APP_CUSTOM_UI_COLOR_DEFS" :key="def.key" class="settings-appearance-field min-w-0">
                     <div class="flex h-9 items-center justify-between gap-2">
                       <Label :for="`custom-ui-${def.key}`" class="truncate text-xs text-muted-foreground">{{ t(def.labelKey) }}</Label>
-                      <input :id="`custom-ui-${def.key}`" type="color" class="h-6 w-10 shrink-0 cursor-pointer rounded border border-border bg-transparent p-0.5" :value="customUiColors[def.key]" @input="updateCustomUiColor(def.key, ($event.target as HTMLInputElement).value)" />
+                      <input :id="`custom-ui-${def.key}`" type="color" class="h-6 w-10 shrink-0 cursor-pointer rounded border border-border bg-transparent p-0.5" :value="activeCustomUiColors[def.key]" @input="updateCustomUiColor(def.key, ($event.target as HTMLInputElement).value)" />
                     </div>
                   </div>
                 </template>

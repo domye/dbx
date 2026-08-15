@@ -123,4 +123,22 @@ describe("useTheme on Linux", () => {
     expect(document.documentElement.style.getPropertyValue("--background")).toBe("");
     expect(document.documentElement.style.getPropertyValue("--dbx-primary-rgb")).toBe("");
   });
+
+  it("applies a separate custom color set in dark mode and switches sets with the mode", async () => {
+    const theme = await loadTheme("dark");
+    theme.setThemePalette("custom");
+
+    // Dark mode uses the dark custom set by default (not the light defaults).
+    expect(document.documentElement.style.getPropertyValue("--background")).toBe("rgb(19 20 22)");
+    expect(document.documentElement.style.getPropertyValue("--foreground")).toBe("rgb(215 215 219)");
+
+    theme.setCustomUiColors({ ...theme.customUiColorsDark.value, background: "#1a1b1e" });
+    expect(document.documentElement.style.getPropertyValue("--background")).toBe("rgb(26 27 30)");
+
+    // Switching to light mode re-applies the light custom set.
+    theme.setThemeMode("light");
+    expect(document.documentElement.style.getPropertyValue("--background")).toBe("rgb(255 255 255)");
+    expect(theme.customUiColors.value.background).toBe("#ffffff");
+    expect(theme.customUiColorsDark.value.background).toBe("#1a1b1e");
+  });
 });

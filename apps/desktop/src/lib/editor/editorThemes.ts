@@ -1,6 +1,6 @@
 import type { Extension } from "@codemirror/state";
 import type { EditorTheme, CustomThemeColors } from "@/stores/settingsStore";
-import type { AppThemeAppearance, AppThemePalette } from "@/lib/app/appTheme";
+import { customUiAppearance, type AppCustomUiColors, type AppThemeAppearance, type AppThemePalette } from "@/lib/app/appTheme";
 import { HighlightStyle, syntaxHighlighting } from "@codemirror/language";
 import { tags } from "@lezer/highlight";
 
@@ -658,11 +658,29 @@ export function resolveEditorTheme(theme: EditorTheme, appAppearance: AppThemeAp
         return appAppearance === "dark" ? "cursor-dark" : "cursor-light";
       case "claude":
         return appAppearance === "dark" ? "claude-dark" : "claude-light";
+      case "custom":
+        // The custom UI palette routes the follow-app editor to verified,
+        // self-consistent themes. The caller derives appAppearance from the
+        // actual custom background luminance, so dark backgrounds pick the
+        // dark theme and light backgrounds the light theme.
+        return appAppearance === "dark" ? "one-dark" : "vscode-light";
       default:
         return appAppearance === "dark" ? "one-dark" : "vscode-light";
     }
   }
   return theme;
+}
+
+/**
+ * Effective appearance for the "Follow app theme" editor: with the custom UI
+ * palette the mode's light/dark flag is replaced by the custom background's
+ * luminance, keeping tokens, selection, cursor, search matches and diagnostics
+ * readable on arbitrarily dark/light custom backgrounds. Other palettes keep
+ * the previous appearance unchanged.
+ */
+export function editorThemeAppearanceFor(appAppearance: AppThemeAppearance, appPalette: AppThemePalette, customUiColors?: AppCustomUiColors): AppThemeAppearance {
+  if (appPalette === "custom" && customUiColors) return customUiAppearance(customUiColors);
+  return appAppearance;
 }
 
 /** Load a CodeMirror theme extension by theme name. */

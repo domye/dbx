@@ -5704,6 +5704,8 @@ export default {
     themePaletteClaude: "Claude Code",
     themePaletteCustom: "Custom",
     customUiReset: "Reset to defaults",
+    customUiEditingLight: "Editing light-mode colors",
+    customUiEditingDark: "Editing dark-mode colors",
     customUiBackground: "Background",
     customUiForeground: "Foreground",
     customUiPrimary: "Primary",

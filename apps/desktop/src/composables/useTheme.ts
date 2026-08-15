@@ -2,12 +2,14 @@ import { computed, ref } from "vue";
 import {
   APP_CORNER_STYLE_STORAGE_KEY,
   APP_CUSTOM_UI_COLOR_DEFS,
+  APP_CUSTOM_UI_DARK_STORAGE_KEY,
   APP_CUSTOM_UI_DERIVED_VARS,
   APP_CUSTOM_UI_STORAGE_KEY,
   APP_THEME_PALETTE_CLASS_NAMES,
   APP_THEME_PALETTE_STORAGE_KEY,
   APP_THEME_STORAGE_KEY,
   DEFAULT_APP_CUSTOM_UI_COLORS,
+  DEFAULT_APP_CUSTOM_UI_COLORS_DARK,
   appCustomUiColorValue,
   getAppThemePaletteClass,
   getTauriThemeForMode,
@@ -33,16 +35,17 @@ const savedThemeMode = safeLocalStorageGet(APP_THEME_STORAGE_KEY);
 const themeMode = ref<AppThemeMode>(normalizeAppThemeMode(savedThemeMode));
 const savedThemePalette = safeLocalStorageGet(APP_THEME_PALETTE_STORAGE_KEY);
 const themePalette = ref<AppThemePalette>(normalizeAppThemePalette(savedThemePalette));
-let savedCustomUiColors: unknown = null;
-const savedCustomUiRaw = safeLocalStorageGet(APP_CUSTOM_UI_STORAGE_KEY);
-if (savedCustomUiRaw) {
+function parseStoredCustomUiColors(raw: string | null): AppCustomUiColors | null {
+  if (!raw) return null;
   try {
-    savedCustomUiColors = JSON.parse(savedCustomUiRaw);
+    return normalizeAppCustomUiColors(JSON.parse(raw));
   } catch {
-    savedCustomUiColors = null;
+    return null;
   }
 }
-const customUiColors = ref<AppCustomUiColors>(normalizeAppCustomUiColors(savedCustomUiColors));
+const customUiColors = ref<AppCustomUiColors>(parseStoredCustomUiColors(safeLocalStorageGet(APP_CUSTOM_UI_STORAGE_KEY)) ?? DEFAULT_APP_CUSTOM_UI_COLORS);
+const customUiColorsDark = ref<AppCustomUiColors>(parseStoredCustomUiColors(safeLocalStorageGet(APP_CUSTOM_UI_DARK_STORAGE_KEY)) ?? DEFAULT_APP_CUSTOM_UI_COLORS_DARK);
+const activeCustomUiColors = computed<AppCustomUiColors>(() => (isDark.value ? customUiColorsDark.value : customUiColors.value));
 const savedCornerStyle = safeLocalStorageGet(APP_CORNER_STYLE_STORAGE_KEY);
 const cornerStyle = ref<AppCornerStyle>(normalizeAppCornerStyle(savedCornerStyle));
 if (savedThemeMode && savedThemeMode !== themeMode.value) safeLocalStorageSet(APP_THEME_STORAGE_KEY, themeMode.value);
@@ -139,7 +142,7 @@ function applyCustomUiColors() {
     return;
   }
   for (const def of APP_CUSTOM_UI_COLOR_DEFS) {
-    const { color, rgbTriplet } = appCustomUiColorValue(customUiColors.value[def.key]);
+    const { color, rgbTriplet } = appCustomUiColorValue(activeCustomUiColors.value[def.key]);
     doc.style.setProperty(def.varName, color);
     if (def.rgbVarName) doc.style.setProperty(def.rgbVarName, rgbTriplet);
   }
@@ -147,13 +150,19 @@ function applyCustomUiColors() {
 }
 
 function setCustomUiColors(colors: AppCustomUiColors) {
-  customUiColors.value = normalizeAppCustomUiColors(colors);
-  safeLocalStorageSet(APP_CUSTOM_UI_STORAGE_KEY, JSON.stringify(customUiColors.value));
+  const next = normalizeAppCustomUiColors(colors);
+  if (isDark.value) {
+    customUiColorsDark.value = next;
+    safeLocalStorageSet(APP_CUSTOM_UI_DARK_STORAGE_KEY, JSON.stringify(next));
+  } else {
+    customUiColors.value = next;
+    safeLocalStorageSet(APP_CUSTOM_UI_STORAGE_KEY, JSON.stringify(next));
+  }
   applyCustomUiColors();
 }
 
 function resetCustomUiColors() {
-  setCustomUiColors({ ...DEFAULT_APP_CUSTOM_UI_COLORS });
+  setCustomUiColors({ ...(isDark.value ? DEFAULT_APP_CUSTOM_UI_COLORS_DARK : DEFAULT_APP_CUSTOM_UI_COLORS) });
 }
 
 function setCornerStyle(style: AppCornerStyle) {
@@ -169,5 +178,5 @@ export function useTheme() {
     setThemeMode(isDark.value ? "light" : "dark");
   }
 
-  return { isDark, themeMode, themePalette, customUiColors, cornerStyle, applyTheme, setThemeMode, setThemePalette, setCustomUiColors, resetCustomUiColors, setCornerStyle, toggleTheme };
+  return { isDark, themeMode, themePalette, customUiColors, customUiColorsDark, activeCustomUiColors, cornerStyle, applyTheme, setThemeMode, setThemePalette, setCustomUiColors, resetCustomUiColors, setCornerStyle, toggleTheme };
 }
