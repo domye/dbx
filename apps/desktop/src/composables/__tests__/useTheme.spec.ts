@@ -107,4 +107,20 @@ describe("useTheme on Linux", () => {
     await flushDynamicImport();
     expect(setTheme).toHaveBeenLastCalledWith("light");
   });
+
+  it("injects custom UI colors as inline CSS variables and removes them when leaving the custom palette", async () => {
+    const theme = await loadTheme();
+    theme.setThemePalette("custom");
+    theme.setCustomUiColors({ ...theme.customUiColors.value, background: "#123456", primary: "#abcdef" });
+
+    expect(theme.themePalette.value).toBe("custom");
+    expect(document.documentElement.style.getPropertyValue("--background")).toBe("rgb(18 52 86)");
+    expect(document.documentElement.style.getPropertyValue("--primary")).toBe("rgb(171 205 239)");
+    expect(document.documentElement.style.getPropertyValue("--dbx-primary-rgb")).toBe("171, 205, 239");
+    expect(document.documentElement.style.getPropertyValue("--sidebar")).toBe("rgb(250 250 250)");
+
+    theme.setThemePalette("pearl");
+    expect(document.documentElement.style.getPropertyValue("--background")).toBe("");
+    expect(document.documentElement.style.getPropertyValue("--dbx-primary-rgb")).toBe("");
+  });
 });

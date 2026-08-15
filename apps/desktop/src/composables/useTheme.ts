@@ -1,16 +1,23 @@
 import { computed, ref } from "vue";
 import {
   APP_CORNER_STYLE_STORAGE_KEY,
+  APP_CUSTOM_UI_COLOR_DEFS,
+  APP_CUSTOM_UI_DERIVED_VARS,
+  APP_CUSTOM_UI_STORAGE_KEY,
   APP_THEME_PALETTE_CLASS_NAMES,
   APP_THEME_PALETTE_STORAGE_KEY,
   APP_THEME_STORAGE_KEY,
+  DEFAULT_APP_CUSTOM_UI_COLORS,
+  appCustomUiColorValue,
   getAppThemePaletteClass,
   getTauriThemeForMode,
   isSystemAppThemeMode,
+  normalizeAppCustomUiColors,
   normalizeAppThemeMode,
   normalizeAppCornerStyle,
   normalizeAppThemePalette,
   resolveAppThemeAppearance,
+  type AppCustomUiColors,
   type AppThemeMode,
   type AppThemePalette,
   type AppCornerStyle,
@@ -26,6 +33,16 @@ const savedThemeMode = safeLocalStorageGet(APP_THEME_STORAGE_KEY);
 const themeMode = ref<AppThemeMode>(normalizeAppThemeMode(savedThemeMode));
 const savedThemePalette = safeLocalStorageGet(APP_THEME_PALETTE_STORAGE_KEY);
 const themePalette = ref<AppThemePalette>(normalizeAppThemePalette(savedThemePalette));
+let savedCustomUiColors: unknown = null;
+const savedCustomUiRaw = safeLocalStorageGet(APP_CUSTOM_UI_STORAGE_KEY);
+if (savedCustomUiRaw) {
+  try {
+    savedCustomUiColors = JSON.parse(savedCustomUiRaw);
+  } catch {
+    savedCustomUiColors = null;
+  }
+}
+const customUiColors = ref<AppCustomUiColors>(normalizeAppCustomUiColors(savedCustomUiColors));
 const savedCornerStyle = safeLocalStorageGet(APP_CORNER_STYLE_STORAGE_KEY);
 const cornerStyle = ref<AppCornerStyle>(normalizeAppCornerStyle(savedCornerStyle));
 if (savedThemeMode && savedThemeMode !== themeMode.value) safeLocalStorageSet(APP_THEME_STORAGE_KEY, themeMode.value);
@@ -67,6 +84,7 @@ function applyTheme() {
   if (paletteClass) doc.classList.add(paletteClass);
   doc.dataset.cornerStyle = cornerStyle.value;
   doc.style.colorScheme = dark ? "dark" : "light";
+  applyCustomUiColors();
 
   // force reflow so the class toggle takes effect before re-enabling transitions
   doc.offsetHeight; // eslint-disable-line @typescript-eslint/no-unused-expressions
@@ -106,6 +124,38 @@ function setThemePalette(palette: AppThemePalette) {
   applyTheme();
 }
 
+function applyCustomUiColors() {
+  if (typeof document === "undefined") return;
+  const doc = document.documentElement;
+  const clear = () => {
+    for (const def of APP_CUSTOM_UI_COLOR_DEFS) {
+      doc.style.removeProperty(def.varName);
+      if (def.rgbVarName) doc.style.removeProperty(def.rgbVarName);
+    }
+    for (const derived of APP_CUSTOM_UI_DERIVED_VARS) doc.style.removeProperty(derived.varName);
+  };
+  if (themePalette.value !== "custom") {
+    clear();
+    return;
+  }
+  for (const def of APP_CUSTOM_UI_COLOR_DEFS) {
+    const { color, rgbTriplet } = appCustomUiColorValue(customUiColors.value[def.key]);
+    doc.style.setProperty(def.varName, color);
+    if (def.rgbVarName) doc.style.setProperty(def.rgbVarName, rgbTriplet);
+  }
+  for (const derived of APP_CUSTOM_UI_DERIVED_VARS) doc.style.setProperty(derived.varName, derived.value);
+}
+
+function setCustomUiColors(colors: AppCustomUiColors) {
+  customUiColors.value = normalizeAppCustomUiColors(colors);
+  safeLocalStorageSet(APP_CUSTOM_UI_STORAGE_KEY, JSON.stringify(customUiColors.value));
+  applyCustomUiColors();
+}
+
+function resetCustomUiColors() {
+  setCustomUiColors({ ...DEFAULT_APP_CUSTOM_UI_COLORS });
+}
+
 function setCornerStyle(style: AppCornerStyle) {
   cornerStyle.value = normalizeAppCornerStyle(style);
   safeLocalStorageSet(APP_CORNER_STYLE_STORAGE_KEY, cornerStyle.value);
@@ -119,5 +169,5 @@ export function useTheme() {
     setThemeMode(isDark.value ? "light" : "dark");
   }
 
-  return { isDark, themeMode, themePalette, cornerStyle, applyTheme, setThemeMode, setThemePalette, setCornerStyle, toggleTheme };
+  return { isDark, themeMode, themePalette, customUiColors, cornerStyle, applyTheme, setThemeMode, setThemePalette, setCustomUiColors, resetCustomUiColors, setCornerStyle, toggleTheme };
 }
