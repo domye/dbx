@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildSqlCompletionThemeRules, editorThemeAppearanceFor, resolveCustomThemeBackgrounds, resolveEditorTheme } from "@/lib/editor/editorThemes";
+import { buildSqlCompletionThemeRules, editorDiagnosticColors, editorThemeAppearanceFor, resolveCustomThemeBackgrounds, resolveEditorTheme } from "@/lib/editor/editorThemes";
 import { DEFAULT_APP_CUSTOM_UI_COLORS, wcagContrastRatio, type AppThemePalette } from "@/lib/app/appTheme";
 import type { EditorTheme } from "@/stores/settingsStore";
 
@@ -129,6 +129,15 @@ describe("custom editor theme backgrounds", () => {
       }
       expect(wcagContrastRatio(theme.comment, theme.bg), `comment on ${theme.bg}`).toBeGreaterThanOrEqual(3.0);
     }
+  });
+
+  it("uses light diagnostic markers on dark editors and dark markers on light editors", () => {
+    const dark = editorDiagnosticColors("dark");
+    const light = editorDiagnosticColors("light");
+    expect(wcagContrastRatio(dark.error, "#282c34")).toBeGreaterThanOrEqual(3.0);
+    expect(wcagContrastRatio(dark.warning, "#282c34")).toBeGreaterThanOrEqual(3.0);
+    expect(wcagContrastRatio(light.error, "#ffffff")).toBeGreaterThanOrEqual(3.0);
+    expect(wcagContrastRatio(light.warning, "#ffffff")).toBeGreaterThanOrEqual(3.0);
   });
 
   it("keeps selected text readable against the curated themes' selection backgrounds", () => {

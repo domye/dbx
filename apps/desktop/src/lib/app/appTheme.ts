@@ -76,6 +76,12 @@ export const APP_CUSTOM_UI_DERIVED_VAR_NAMES: readonly string[] = [
   "--sidebar-ring",
   "--input",
   "--ring",
+  "--dbx-chrome",
+  "--dbx-chrome-muted",
+  "--dbx-content",
+  "--dbx-editor-toolbar",
+  "--dbx-gutter",
+  "--dbx-sidebar-header",
 ];
 
 export function mixHex(a: string, b: string, weight: number): string {
@@ -108,6 +114,13 @@ export function deriveCustomUiColors(colors: AppCustomUiColors): Record<string, 
   const secondary = mixHex(background, foreground, 0.06);
   const accent = mixHex(background, foreground, 0.12);
   const primaryFg = readableTextOn(primary);
+  // Chrome surfaces are near-background tints so foreground text stays readable
+  // even when the user pairs an inverted (dark bg + light fg) custom palette.
+  const chrome = mixHex(background, foreground, 0.02);
+  const chromeMuted = mixHex(background, foreground, 0.035);
+  const toolbar = mixHex(background, foreground, 0.02);
+  const gutter = mixHex(background, foreground, 0.035);
+  const sidebarHeader = mixHex(sidebar, foreground, 0.02);
   return {
     "--card": card,
     "--card-foreground": rgbValue(foreground),
@@ -129,6 +142,12 @@ export function deriveCustomUiColors(colors: AppCustomUiColors): Record<string, 
     "--sidebar-ring": rgbValue(primary),
     "--input": rgbValue(border),
     "--ring": rgbValue(primary),
+    "--dbx-chrome": chrome,
+    "--dbx-chrome-muted": chromeMuted,
+    "--dbx-content": rgbValue(background),
+    "--dbx-editor-toolbar": toolbar,
+    "--dbx-gutter": gutter,
+    "--dbx-sidebar-header": sidebarHeader,
   };
 }
 
