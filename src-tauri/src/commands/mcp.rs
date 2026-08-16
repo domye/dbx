@@ -1374,6 +1374,7 @@ mod tests {
         ));
     }
 
+    #[test]
     fn pnpm_shim_resolves_inline_script_path() {
         use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -1458,7 +1459,6 @@ mod tests {
         let _ = std::fs::remove_dir_all(dir);
     }
 
-    #[test]
     #[test]
     fn installed_runtime_outranks_an_earlier_runtime_without_mcp() {
         let first = runtime("/runtime/node-26", None);
