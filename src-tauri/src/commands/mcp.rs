@@ -14,6 +14,10 @@ const MCP_PNPM_INSTALL_COMMAND: &str = "pnpm add -g @dbx-app/mcp-server";
 const MCP_PNPM_UPDATE_COMMAND: &str = "pnpm update -g @dbx-app/mcp-server";
 const MCP_UNINSTALL_COMMAND: &str = "npm uninstall -g @dbx-app/mcp-server";
 const MCP_PNPM_UNINSTALL_COMMAND: &str = "pnpm remove -g @dbx-app/mcp-server";
+const MCP_UNKNOWN_MANAGEMENT_HINT: &str =
+    "DBX MCP is installed but its package manager could not be confirmed; manage it manually";
+const MCP_UNKNOWN_MANAGEMENT_MESSAGE: &str =
+    "DBX MCP is installed but its package manager could not be confirmed (Yarn, Bun or a manual copy). DBX does not run npm/pnpm management commands against it; please update or remove it with the package manager you used.";
 const MCP_MIN_NODE_VERSION: NodeVersion = NodeVersion { major: 18, minor: 18, patch: 0 };
 const MCP_MIN_NODE_VERSION_REQUIREMENT: &str = ">=18.18.0";
 const SHELL_COMMAND_MARKER: &str = "__DBX_MCP_COMMAND_OUTPUT_START__";
@@ -30,6 +34,7 @@ pub struct McpServerStatus {
     pub bin_path: Option<String>,
     pub native_bin_path: Option<String>,
     pub script_path: Option<String>,
+    pub managed_automatically: bool,
     pub data_dir: Option<String>,
     pub install_command: String,
     pub update_command: String,
@@ -51,8 +56,8 @@ struct NodeRuntimeCandidate {
 struct NodeRuntime {
     node_launcher_path: PathBuf,
     node_path: PathBuf,
-    npm_cli_path: PathBuf,
-    npm_root: PathBuf,
+    npm_cli_path: Option<PathBuf>,
+    npm_root: Option<PathBuf>,
     package_manager: McpPackageManager,
     node_version: String,
     mcp_version: Option<String>,
@@ -71,7 +76,18 @@ struct McpPackage {
 #[derive(Debug, Clone)]
 enum McpPackageManager {
     Npm,
-    Pnpm { command_path: PathBuf },
+    Pnpm {
+        command_path: PathBuf,
+    },
+    /// A shim was located but its origin (Yarn, Bun, manual copy, ...) could not
+    /// be confirmed. DBX must not run npm/pnpm management commands against it.
+    Unknown,
+}
+
+impl McpPackageManager {
+    fn auto_managed(&self) -> bool {
+        !matches!(self, McpPackageManager::Unknown)
+    }
 }
 
 #[derive(Debug)]
@@ -90,21 +106,27 @@ impl NodeRuntime {
         if !is_mcp_compatible_node_version(&node_version) {
             return None;
         }
-        let npm_cli_path = find_npm_cli(&node_path, launcher_dir.as_deref())?;
-
-        let npm_root = npm_stdout(&node_path, &npm_cli_path, &["root", "-g"]).ok()?;
-        let npm_root = normalized_reported_path(Path::new(npm_root.trim()))?;
-        let npm_prefix = npm_stdout(&node_path, &npm_cli_path, &["prefix", "-g"])
-            .ok()
+        // npm is optional: pnpm-only and bare-Node environments may have no npm on
+        // PATH, so npm metadata must not gate the whole probe.
+        let npm_cli_path = find_npm_cli(&node_path, launcher_dir.as_deref());
+        let npm_root = npm_cli_path
+            .as_ref()
+            .and_then(|cli| npm_stdout(&node_path, cli, &["root", "-g"]).ok())
+            .and_then(|value| normalized_reported_path(Path::new(value.trim())));
+        let npm_prefix = npm_cli_path
+            .as_ref()
+            .and_then(|cli| npm_stdout(&node_path, cli, &["prefix", "-g"]).ok())
             .and_then(|value| normalized_reported_path(Path::new(value.trim())))
-            .unwrap_or_else(|| npm_prefix_from_root(&npm_root));
-        let npm_package_root = npm_root.join(MCP_PACKAGE_NAME);
-        let npm_package = mcp_package(&npm_package_root).and_then(|package| {
-            Some(LocatedMcpPackage {
-                package_root: canonical_runtime_path(&npm_package_root)?,
-                package,
-                bin_path: mcp_bin_path(&npm_prefix),
-                package_manager: McpPackageManager::Npm,
+            .or_else(|| npm_root.as_ref().map(|root| npm_prefix_from_root(root)));
+        let npm_package_root = npm_root.as_ref().map(|root| root.join(MCP_PACKAGE_NAME));
+        let npm_package = npm_package_root.as_ref().and_then(|package_root| {
+            mcp_package(package_root).and_then(|package| {
+                Some(LocatedMcpPackage {
+                    package_root: canonical_runtime_path(package_root)?,
+                    package,
+                    bin_path: npm_prefix.as_ref().and_then(|prefix| mcp_bin_path(prefix)),
+                    package_manager: McpPackageManager::Npm,
+                })
             })
         });
         let shim_package = launcher_dir.as_deref().and_then(mcp_package_from_command_dir);
@@ -128,8 +150,10 @@ impl NodeRuntime {
         // Resolve the package-declared launcher so npm layout changes do not break the built-in AI assistant.
         let mcp_script_path =
             package.as_ref().filter(|_| package_is_compatible).map(|located| located.package.script_path.clone());
-        let mcp_bin_path =
-            package.as_ref().and_then(|located| located.bin_path.clone()).or_else(|| mcp_bin_path(&npm_prefix));
+        let mcp_bin_path = package
+            .as_ref()
+            .and_then(|located| located.bin_path.clone())
+            .or_else(|| npm_prefix.as_ref().and_then(|prefix| mcp_bin_path(prefix)));
         // Prefer pnpm for install/update/uninstall when pnpm is reachable and no
         // npm-installed package was located, so pnpm-based setups see pnpm commands.
         let package_manager = package.as_ref().map(|located| located.package_manager.clone()).unwrap_or_else(|| {
@@ -139,7 +163,9 @@ impl NodeRuntime {
         });
         // TRAE on Windows splits executable paths containing spaces, so expose the native package binary as a safe direct launch option.
         let mcp_native_bin_path = package_is_compatible
-            .then(|| package.as_ref().and_then(|located| mcp_native_binary_path(&located.package_root, &npm_root)))
+            .then(|| {
+                package.as_ref().and_then(|located| mcp_native_binary_path(&located.package_root, npm_root.as_deref()))
+            })
             .flatten();
 
         Some(Self {
@@ -161,7 +187,9 @@ impl NodeRuntime {
     }
 
     fn npm_output(&self, args: &[&str]) -> Result<CommandOutput, String> {
-        npm_output(&self.node_path, &self.npm_cli_path, args)
+        let cli =
+            self.npm_cli_path.as_ref().ok_or_else(|| "npm CLI is not available in this environment".to_string())?;
+        npm_output(&self.node_path, cli, args)
     }
 
     fn refresh(&self) -> Option<Self> {
@@ -172,6 +200,7 @@ impl NodeRuntime {
         match &self.package_manager {
             McpPackageManager::Npm => MCP_INSTALL_COMMAND,
             McpPackageManager::Pnpm { .. } => MCP_PNPM_UPDATE_COMMAND,
+            McpPackageManager::Unknown => MCP_UNKNOWN_MANAGEMENT_HINT,
         }
     }
 
@@ -179,6 +208,7 @@ impl NodeRuntime {
         match &self.package_manager {
             McpPackageManager::Npm => MCP_INSTALL_COMMAND,
             McpPackageManager::Pnpm { .. } => MCP_PNPM_INSTALL_COMMAND,
+            McpPackageManager::Unknown => MCP_UNKNOWN_MANAGEMENT_HINT,
         }
     }
 
@@ -186,7 +216,12 @@ impl NodeRuntime {
         match &self.package_manager {
             McpPackageManager::Npm => MCP_UNINSTALL_COMMAND,
             McpPackageManager::Pnpm { .. } => MCP_PNPM_UNINSTALL_COMMAND,
+            McpPackageManager::Unknown => MCP_UNKNOWN_MANAGEMENT_HINT,
         }
+    }
+
+    fn auto_managed(&self) -> bool {
+        self.package_manager.auto_managed()
     }
 
     fn install_or_update(&self) -> Result<CommandOutput, String> {
@@ -197,7 +232,8 @@ impl NodeRuntime {
             McpPackageManager::Pnpm { command_path } => {
                 run_package_manager_command(command_path, &["add", "-g", MCP_PACKAGE_NAME], &self.node_launcher_path)
             }
-            _ => self.npm_output(&["install", "-g", "@dbx-app/mcp-server@latest"]),
+            McpPackageManager::Npm => self.npm_output(&["install", "-g", "@dbx-app/mcp-server@latest"]),
+            McpPackageManager::Unknown => Err(MCP_UNKNOWN_MANAGEMENT_MESSAGE.to_string()),
         }
     }
 
@@ -207,6 +243,7 @@ impl NodeRuntime {
                 run_package_manager_command(command_path, &["remove", "-g", MCP_PACKAGE_NAME], &self.node_launcher_path)
             }
             McpPackageManager::Npm => self.npm_output(&["uninstall", "-g", MCP_PACKAGE_NAME]),
+            McpPackageManager::Unknown => Err(MCP_UNKNOWN_MANAGEMENT_MESSAGE.to_string()),
         }
     }
 }
@@ -250,8 +287,9 @@ pub async fn check_mcp_server_status(app: AppHandle) -> Result<McpServerStatus, 
     let error = if npm_available {
         None
     } else {
-        Some(format!("Unable to resolve a compatible Node.js ({}) and npm runtime.", MCP_MIN_NODE_VERSION_REQUIREMENT))
+        Some(format!("Unable to resolve a compatible Node.js ({}) runtime.", MCP_MIN_NODE_VERSION_REQUIREMENT))
     };
+    let managed_automatically = runtime.as_ref().map(NodeRuntime::auto_managed).unwrap_or(true);
 
     Ok(McpServerStatus {
         installed: current_version.is_some() || bin_path.is_some() || script_path.is_some(),
@@ -264,6 +302,7 @@ pub async fn check_mcp_server_status(app: AppHandle) -> Result<McpServerStatus, 
         bin_path,
         native_bin_path,
         script_path,
+        managed_automatically,
         data_dir,
         install_command: runtime.as_ref().map(NodeRuntime::install_command).unwrap_or(MCP_INSTALL_COMMAND).to_string(),
         update_command: runtime.as_ref().map(NodeRuntime::update_command).unwrap_or(MCP_INSTALL_COMMAND).to_string(),
@@ -299,11 +338,12 @@ pub async fn install_mcp_server() -> Result<String, String> {
             )
         })?;
         installed.mcp_script_path.as_ref().ok_or_else(|| {
-            format!(
-                "Installation completed, but {} was not found under {}.",
-                MCP_PACKAGE_NAME,
-                installed.npm_root.display()
-            )
+            let npm_root = installed
+                .npm_root
+                .as_ref()
+                .map(|root| root.display().to_string())
+                .unwrap_or_else(|| "the package manager's global root".to_string());
+            format!("Installation completed, but {} was not found under {}.", MCP_PACKAGE_NAME, npm_root)
         })?;
         let version = installed.mcp_version.unwrap_or_else(|| "unknown".to_string());
         Ok(format!("Successfully installed @dbx-app/mcp-server@{}", version))
@@ -832,9 +872,12 @@ fn mcp_package_from_command_dir(dir: &Path) -> Option<LocatedMcpPackage> {
         })
     })?;
     let (package_root, package) = mcp_package_from_script(&script_path)?;
+    // A shim found outside npm's global root is only managed automatically when a
+    // recognizable package manager sits next to it; anything else is treated as
+    // unknown so we never run npm/pnpm commands against another manager's install.
     let package_manager = pnpm_command_near(dir)
         .map(|command_path| McpPackageManager::Pnpm { command_path })
-        .unwrap_or(McpPackageManager::Npm);
+        .unwrap_or(McpPackageManager::Unknown);
     Some(LocatedMcpPackage { package_root, package, bin_path: Some(bin_path), package_manager })
 }
 
@@ -858,23 +901,22 @@ fn pnpm_command_near(dir: &Path) -> Option<PathBuf> {
     })
 }
 
-fn mcp_native_binary_path(package_root: &Path, npm_root: &Path) -> Option<PathBuf> {
+fn mcp_native_binary_path(package_root: &Path, npm_root: Option<&Path>) -> Option<PathBuf> {
     let (package_name, binary_name) = mcp_native_package()?;
     mcp_native_binary_path_for(package_root, npm_root, package_name, binary_name)
 }
 
 fn mcp_native_binary_path_for(
     package_root: &Path,
-    npm_root: &Path,
+    npm_root: Option<&Path>,
     package_name: &str,
     binary_name: &str,
 ) -> Option<PathBuf> {
-    [
-        package_root.join("node_modules").join(package_name).join("bin").join(binary_name),
-        npm_root.join(package_name).join("bin").join(binary_name),
-    ]
-    .into_iter()
-    .find_map(|path| canonical_runtime_path(&path))
+    let mut candidates = vec![package_root.join("node_modules").join(package_name).join("bin").join(binary_name)];
+    if let Some(npm_root) = npm_root {
+        candidates.push(npm_root.join(package_name).join("bin").join(binary_name));
+    }
+    candidates.into_iter().find_map(|path| canonical_runtime_path(&path))
 }
 
 fn mcp_native_package() -> Option<(&'static str, &'static str)> {
@@ -1190,10 +1232,11 @@ mod tests {
     use super::{bash_login_script, prefixed_output_path, NodeRuntimeCandidate};
     use super::{
         canonical_runtime_path, is_mcp_compatible_node_version, mcp_command_for_runtime, mcp_native_binary_path_for,
-        mcp_package, node_script_from_launcher, normalized_reported_path, npm_cli_candidates,
-        parse_minimum_node_version, parse_node_version, pnpm_shim_target, prefer_runtime, require_managed_mcp_command,
-        resolve_managed_mcp_command, stdout_after_shell_marker, NodeRuntime, NodeVersion,
-        MCP_MIN_NODE_VERSION_REQUIREMENT, MCP_PACKAGE_NAME, SHELL_COMMAND_MARKER,
+        mcp_package, mcp_package_from_command_dir, node_script_from_launcher, normalized_reported_path,
+        npm_cli_candidates, parse_minimum_node_version, parse_node_version, pnpm_shim_target, prefer_runtime,
+        require_managed_mcp_command, resolve_managed_mcp_command, stdout_after_shell_marker, McpPackageManager,
+        NodeRuntime, NodeVersion, MCP_MIN_NODE_VERSION_REQUIREMENT, MCP_PACKAGE_NAME, MCP_UNKNOWN_MANAGEMENT_HINT,
+        SHELL_COMMAND_MARKER,
     };
     #[cfg(not(windows))]
     use super::{shell_command_script, shell_quote};
@@ -1212,8 +1255,8 @@ mod tests {
         NodeRuntime {
             node_launcher_path: PathBuf::from(node_path),
             node_path: PathBuf::from(node_path),
-            npm_cli_path: PathBuf::from(format!("{node_path}-npm-cli.js")),
-            npm_root: PathBuf::from(npm_root),
+            npm_cli_path: Some(PathBuf::from(format!("{node_path}-npm-cli.js"))),
+            npm_root: Some(PathBuf::from(npm_root)),
             package_manager: super::McpPackageManager::Npm,
             node_version: node_version.to_string(),
             mcp_version: script_path.map(|_| "0.4.29".to_string()),
@@ -1298,6 +1341,64 @@ mod tests {
 
         assert_eq!(pnpm_shim_target(&shim), canonical_runtime_path(&script));
         assert_eq!(node_script_from_launcher(&shim), canonical_runtime_path(&script));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn unknown_package_manager_shim_is_read_only_and_requires_no_npm() {
+        use std::time::{SystemTime, UNIX_EPOCH};
+
+        let nonce = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+        let dir = std::env::temp_dir().join(format!("dbx-mcp-pm-test-{}-{nonce}", std::process::id()));
+        let bin_dir = dir.join("bin");
+        let script = dir.join("node_modules").join("@dbx-app").join("mcp-server").join("bin").join("dbx-mcp-server.js");
+        std::fs::create_dir_all(script.parent().unwrap()).unwrap();
+        std::fs::write(&script, "// launcher\n").unwrap();
+        std::fs::write(
+            dir.join("node_modules").join("@dbx-app").join("mcp-server").join("package.json"),
+            r#"{"version":"0.4.62","bin":{"dbx-mcp-server":"bin/dbx-mcp-server.js"}}"#,
+        )
+        .unwrap();
+        let sep = std::path::MAIN_SEPARATOR;
+        let shim = bin_dir.join("dbx-mcp-server.CMD");
+        std::fs::create_dir_all(&bin_dir).unwrap();
+        std::fs::write(
+            &shim,
+            format!(
+                "@SETLOCAL\r\nnode  \"%~dp0{sep}..{sep}node_modules{sep}@dbx-app{sep}mcp-server{sep}bin{sep}dbx-mcp-server.js\" %*\r\n"
+            ),
+        )
+        .unwrap();
+
+        // No recognizable package manager next to the shim -> Unknown + read-only,
+        // and npm being absent must not matter (bare Node / pnpm-only environments).
+        let located = mcp_package_from_command_dir(&bin_dir).unwrap();
+        assert!(matches!(located.package_manager, McpPackageManager::Unknown));
+        assert!(!located.package_manager.auto_managed());
+        let runtime = NodeRuntime {
+            node_launcher_path: bin_dir.join("node.exe"),
+            node_path: bin_dir.join("node.exe"),
+            npm_cli_path: None,
+            npm_root: None,
+            package_manager: located.package_manager,
+            node_version: "v24.16.0".to_string(),
+            mcp_version: located.package.version,
+            mcp_script_path: Some(located.package.script_path),
+            mcp_bin_path: Some(shim.clone()),
+            mcp_native_bin_path: None,
+        };
+        assert!(runtime.has_mcp_package());
+        assert!(runtime.npm_output(&["--version"]).is_err());
+        assert!(runtime.install_or_update().is_err());
+        assert!(runtime.uninstall().is_err());
+        assert_eq!(runtime.install_command(), MCP_UNKNOWN_MANAGEMENT_HINT);
+
+        // A pnpm command next to the shim -> auto-managed as pnpm.
+        std::fs::write(bin_dir.join("pnpm.CMD"), "@ECHO off\r\n").unwrap();
+        let located_pnpm = mcp_package_from_command_dir(&bin_dir).unwrap();
+        assert!(matches!(located_pnpm.package_manager, McpPackageManager::Pnpm { .. }));
+        assert!(located_pnpm.package_manager.auto_managed());
+
         let _ = std::fs::remove_dir_all(dir);
     }
 
@@ -1447,7 +1548,7 @@ mod tests {
         std::fs::write(&nested_binary, "nested binary").unwrap();
 
         assert_eq!(
-            mcp_native_binary_path_for(&package_root, &npm_root, package_name, binary_name),
+            mcp_native_binary_path_for(&package_root, Some(&npm_root), package_name, binary_name),
             canonical_runtime_path(&nested_binary)
         );
 
@@ -1457,8 +1558,14 @@ mod tests {
         std::fs::write(&hoisted_binary, "hoisted binary").unwrap();
 
         assert_eq!(
-            mcp_native_binary_path_for(&package_root, &npm_root, package_name, binary_name),
+            mcp_native_binary_path_for(&package_root, Some(&npm_root), package_name, binary_name),
             canonical_runtime_path(&hoisted_binary)
+        );
+
+        // Without an npm root the nested (package-local) copy is still found.
+        assert_eq!(
+            mcp_native_binary_path_for(&package_root, None, package_name, binary_name),
+            canonical_runtime_path(&nested_binary)
         );
 
         let _ = std::fs::remove_dir_all(dir);

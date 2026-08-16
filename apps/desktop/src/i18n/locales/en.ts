@@ -6201,6 +6201,7 @@ export default {
     mcpInstallCommand: "Install command",
     mcpUpdateCommand: "Upgrade command",
     mcpUninstallCommand: "Uninstall command",
+    mcpManualManagementHint: "DBX MCP is installed but its package manager could not be confirmed. Please update or remove it with the package manager you used.",
     mcpInstallButton: "Install",
     mcpUpdateButton: "Upgrade",
     mcpUpToDate: "Up to date",

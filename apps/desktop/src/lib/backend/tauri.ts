@@ -2032,6 +2032,7 @@ export interface McpServerStatus {
   bin_path: string | null;
   native_bin_path: string | null;
   script_path: string | null;
+  managed_automatically: boolean;
   data_dir: string | null;
   install_command: string;
   update_command: string;

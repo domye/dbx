@@ -6190,6 +6190,7 @@ export default withEnglishFallback({
     mcpInstallCommand: "安装命令",
     mcpUpdateCommand: "升级命令",
     mcpUninstallCommand: "卸载命令",
+    mcpManualManagementHint: "已检测到 DBX MCP 安装，但无法确认其包管理器来源。请用你当初使用的包管理器手动更新/卸载。",
     mcpInstallButton: "安装",
     mcpUpdateButton: "升级",
     mcpUpToDate: "已是最新",
