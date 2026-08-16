@@ -10,6 +10,7 @@ use tauri::{AppHandle, Manager};
 const MCP_PACKAGE_NAME: &str = "@dbx-app/mcp-server";
 const MCP_LATEST_URL: &str = "https://registry.npmjs.org/@dbx-app%2fmcp-server/latest";
 const MCP_INSTALL_COMMAND: &str = "npm install -g @dbx-app/mcp-server@latest";
+const MCP_PNPM_INSTALL_COMMAND: &str = "pnpm add -g @dbx-app/mcp-server";
 const MCP_PNPM_UPDATE_COMMAND: &str = "pnpm update -g @dbx-app/mcp-server";
 const MCP_UNINSTALL_COMMAND: &str = "npm uninstall -g @dbx-app/mcp-server";
 const MCP_PNPM_UNINSTALL_COMMAND: &str = "pnpm remove -g @dbx-app/mcp-server";
@@ -123,8 +124,13 @@ impl NodeRuntime {
             package.as_ref().filter(|_| package_is_compatible).map(|located| located.package.script_path.clone());
         let mcp_bin_path =
             package.as_ref().and_then(|located| located.bin_path.clone()).or_else(|| mcp_bin_path(&npm_prefix));
-        let package_manager =
-            package.as_ref().map(|located| located.package_manager.clone()).unwrap_or(McpPackageManager::Npm);
+        // Prefer pnpm for install/update/uninstall when pnpm is reachable and no
+        // npm-installed package was located, so pnpm-based setups see pnpm commands.
+        let package_manager = package.as_ref().map(|located| located.package_manager.clone()).unwrap_or_else(|| {
+            locate_command("pnpm")
+                .map(|command_path| McpPackageManager::Pnpm { command_path: PathBuf::from(command_path) })
+                .unwrap_or(McpPackageManager::Npm)
+        });
         // TRAE on Windows splits executable paths containing spaces, so expose the native package binary as a safe direct launch option.
         let mcp_native_bin_path = package_is_compatible
             .then(|| package.as_ref().and_then(|located| mcp_native_binary_path(&located.package_root, &npm_root)))
@@ -163,6 +169,13 @@ impl NodeRuntime {
         }
     }
 
+    fn install_command(&self) -> &'static str {
+        match &self.package_manager {
+            McpPackageManager::Npm => MCP_INSTALL_COMMAND,
+            McpPackageManager::Pnpm { .. } => MCP_PNPM_INSTALL_COMMAND,
+        }
+    }
+
     fn uninstall_command(&self) -> &'static str {
         match &self.package_manager {
             McpPackageManager::Npm => MCP_UNINSTALL_COMMAND,
@@ -174,6 +187,9 @@ impl NodeRuntime {
         match &self.package_manager {
             McpPackageManager::Pnpm { command_path } if self.has_mcp_package() => {
                 run_package_manager_command(command_path, &["update", "-g", MCP_PACKAGE_NAME], &self.node_launcher_path)
+            }
+            McpPackageManager::Pnpm { command_path } => {
+                run_package_manager_command(command_path, &["add", "-g", MCP_PACKAGE_NAME], &self.node_launcher_path)
             }
             _ => self.npm_output(&["install", "-g", "@dbx-app/mcp-server@latest"]),
         }
@@ -243,7 +259,7 @@ pub async fn check_mcp_server_status(app: AppHandle) -> Result<McpServerStatus, 
         native_bin_path,
         script_path,
         data_dir,
-        install_command: MCP_INSTALL_COMMAND.to_string(),
+        install_command: runtime.as_ref().map(NodeRuntime::install_command).unwrap_or(MCP_INSTALL_COMMAND).to_string(),
         update_command: runtime.as_ref().map(NodeRuntime::update_command).unwrap_or(MCP_INSTALL_COMMAND).to_string(),
         uninstall_command: runtime
             .as_ref()
