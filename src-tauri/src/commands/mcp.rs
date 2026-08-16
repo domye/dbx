@@ -25,6 +25,9 @@ const SHELL_COMMAND_MARKER: &str = "__DBX_MCP_COMMAND_OUTPUT_START__";
 #[derive(Debug, Serialize)]
 pub struct McpServerStatus {
     pub installed: bool,
+    /// Whether a compatible Node.js runtime was resolved (npm, pnpm, or bare).
+    pub runtime_available: bool,
+    /// Whether an npm CLI is actually present; pnpm-only setups report false.
     pub npm_available: bool,
     pub node_path: Option<String>,
     pub node_version: Option<String>,
@@ -270,7 +273,10 @@ pub async fn check_mcp_server_status(app: AppHandle) -> Result<McpServerStatus, 
     let latest_version = fetch_latest_mcp_version();
     let (local_status, latest_version) = tokio::join!(local_status, latest_version);
     let (runtime, fallback_bin) = local_status.map_err(|err| err.to_string())?;
-    let npm_available = runtime.is_some();
+    let runtime_available = runtime.is_some();
+    // npm may be absent in pnpm-only / bare-Node environments; report its real
+    // presence separately from runtime availability.
+    let npm_available = runtime.as_ref().is_some_and(|runtime| runtime.npm_cli_path.is_some());
     let node_path = runtime.as_ref().map(|runtime| path_string(&runtime.node_path));
     let node_version = runtime.as_ref().map(|runtime| runtime.node_version.clone());
     let current_version = runtime.as_ref().and_then(|runtime| runtime.mcp_version.clone());
@@ -284,7 +290,7 @@ pub async fn check_mcp_server_status(app: AppHandle) -> Result<McpServerStatus, 
         .as_deref()
         .zip(latest_version.as_deref())
         .is_some_and(|(current, latest)| dbx_core::update::is_newer_version(latest, current));
-    let error = if npm_available {
+    let error = if runtime_available {
         None
     } else {
         Some(format!("Unable to resolve a compatible Node.js ({}) runtime.", MCP_MIN_NODE_VERSION_REQUIREMENT))
@@ -293,6 +299,7 @@ pub async fn check_mcp_server_status(app: AppHandle) -> Result<McpServerStatus, 
 
     Ok(McpServerStatus {
         installed: current_version.is_some() || bin_path.is_some() || script_path.is_some(),
+        runtime_available,
         npm_available,
         node_path,
         node_version,

@@ -2023,6 +2023,7 @@ export interface UpdateDownloadProgress {
 
 export interface McpServerStatus {
   installed: boolean;
+  runtime_available: boolean;
   npm_available: boolean;
   node_path: string | null;
   node_version: string | null;
