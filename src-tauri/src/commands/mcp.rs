@@ -1417,15 +1417,17 @@ mod tests {
         )
         .unwrap();
         let sep = std::path::MAIN_SEPARATOR;
-        let shim = bin_dir.join("dbx-mcp-server.CMD");
+        let shim = bin_dir.join(if cfg!(windows) { "dbx-mcp-server.CMD" } else { "dbx-mcp-server" });
         std::fs::create_dir_all(&bin_dir).unwrap();
-        std::fs::write(
-            &shim,
+        let shim_content = if cfg!(windows) {
             format!(
                 "@SETLOCAL\r\nnode  \"%~dp0{sep}..{sep}node_modules{sep}@dbx-app{sep}mcp-server{sep}bin{sep}dbx-mcp-server.js\" %*\r\n"
-            ),
-        )
-        .unwrap();
+            )
+        } else {
+            "#!/bin/sh\nnode \"$basedir/../node_modules/@dbx-app/mcp-server/bin/dbx-mcp-server.js\" \"$@\"\n"
+                .to_string()
+        };
+        std::fs::write(&shim, shim_content).unwrap();
 
         // No recognizable package manager next to the shim -> Unknown + read-only,
         // and npm being absent must not matter (bare Node / pnpm-only environments).
@@ -1451,7 +1453,8 @@ mod tests {
         assert_eq!(runtime.install_command(), MCP_UNKNOWN_MANAGEMENT_HINT);
 
         // A pnpm command next to the shim -> auto-managed as pnpm.
-        std::fs::write(bin_dir.join("pnpm.CMD"), "@ECHO off\r\n").unwrap();
+        let pnpm_name = if cfg!(windows) { "pnpm.CMD" } else { "pnpm" };
+        std::fs::write(bin_dir.join(pnpm_name), "@ECHO off\r\n").unwrap();
         let located_pnpm = mcp_package_from_command_dir(&bin_dir).unwrap();
         assert!(matches!(located_pnpm.package_manager, McpPackageManager::Pnpm { .. }));
         assert!(located_pnpm.package_manager.auto_managed());
@@ -1815,7 +1818,7 @@ mod tests {
         let update_output = probed.install_or_update().unwrap();
         assert!(update_output.success);
         let pnpm_log = std::fs::read_to_string(&pnpm_log_path).unwrap();
-        assert!(pnpm_log.contains("ARGS=update -g @dbx-app/mcp-server\n"));
+        assert!(pnpm_log.contains("ARGS=add -g @dbx-app/mcp-server\n"));
         assert!(!pnpm_log.contains("--registry"));
         assert!(pnpm_log.contains(&format!("PNPM_HOME={}", dir.display())));
         assert!(pnpm_log.contains(&format!("PATH={}", bin_dir.display())));
