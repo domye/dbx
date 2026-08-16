@@ -1717,7 +1717,7 @@ mod tests {
         let probed = NodeRuntime::probe(NodeRuntimeCandidate { node_path: node_alias.clone() }).unwrap();
 
         assert_eq!(probed.node_path, canonical_runtime_path(&node_path).unwrap());
-        assert_eq!(probed.npm_root, canonical_runtime_path(&npm_root).unwrap());
+        assert_eq!(probed.npm_root, Some(canonical_runtime_path(&npm_root).unwrap()));
         assert_eq!(probed.node_version, "v24.16.0");
         assert_eq!(probed.mcp_script_path, canonical_runtime_path(&script_path));
         let install_output = probed.install_or_update().unwrap();
@@ -1802,8 +1802,8 @@ mod tests {
 
         assert_eq!(probed.node_launcher_path, node_alias);
         assert_eq!(probed.node_path, canonical_runtime_path(&node_path).unwrap());
-        assert_eq!(probed.npm_cli_path, canonical_runtime_path(&npm_cli_path).unwrap());
-        assert_eq!(probed.npm_root, canonical_runtime_path(&npm_root).unwrap());
+        assert_eq!(probed.npm_cli_path, Some(canonical_runtime_path(&npm_cli_path).unwrap()));
+        assert_eq!(probed.npm_root, Some(canonical_runtime_path(&npm_root).unwrap()));
         assert_eq!(probed.mcp_script_path, canonical_runtime_path(&script_path));
         assert_eq!(probed.mcp_version.as_deref(), Some("0.4.44"));
         assert_eq!(probed.update_command(), super::MCP_PNPM_UPDATE_COMMAND);
