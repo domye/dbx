@@ -138,13 +138,22 @@ impl NodeRuntime {
         let pnpm_bin_package = locate_command("pnpm")
             .and_then(|command| Path::new(&command).parent().map(Path::to_path_buf))
             .and_then(|dir| mcp_package_from_command_dir(&dir));
+        // pnpm writes global shims to its global-bin-dir, which is often the pnpm
+        // home itself rather than the `bin` subdir holding pnpm.CMD; probe both so
+        // a fresh `pnpm add -g` is found wherever pnpm actually put the shim.
+        let pnpm_home_package = locate_command("pnpm")
+            .and_then(|command| pnpm_home_from_command(Path::new(&command)))
+            .and_then(|dir| mcp_package_from_command_dir(&dir));
         // Any package manager that puts a dbx-mcp-server shim on PATH (Yarn, Bun,
         // manually curated dirs) is detected through the shim itself.
         let path_shim_package = locate_command("dbx-mcp-server")
             .and_then(|command| Path::new(&command).parent().map(Path::to_path_buf))
             .and_then(|dir| mcp_package_from_command_dir(&dir));
-        let package =
-            preferred_mcp_package(npm_package, shim_package.or(pnpm_bin_package).or(path_shim_package), &node_version);
+        let package = preferred_mcp_package(
+            npm_package,
+            shim_package.or(pnpm_bin_package).or(pnpm_home_package).or(path_shim_package),
+            &node_version,
+        );
         let package_is_compatible = package
             .as_ref()
             .and_then(|located| located.package.minimum_node_version)
@@ -229,9 +238,10 @@ impl NodeRuntime {
 
     fn install_or_update(&self) -> Result<CommandOutput, String> {
         match &self.package_manager {
-            McpPackageManager::Pnpm { command_path } if self.has_mcp_package() => {
-                run_package_manager_command(command_path, &["update", "-g", MCP_PACKAGE_NAME], &self.node_launcher_path)
-            }
+            // `pnpm add -g` always installs the latest into pnpm's real global dir
+            // and heals legacy/mismatched layouts (e.g. an old `pnpm-global` dir the
+            // current pnpm does not manage); `pnpm update -g` only touches the current
+            // global dir and would silently keep the old version in such setups.
             McpPackageManager::Pnpm { command_path } => {
                 run_package_manager_command(command_path, &["add", "-g", MCP_PACKAGE_NAME], &self.node_launcher_path)
             }
@@ -345,12 +355,16 @@ pub async fn install_mcp_server() -> Result<String, String> {
             )
         })?;
         installed.mcp_script_path.as_ref().ok_or_else(|| {
-            let npm_root = installed
-                .npm_root
-                .as_ref()
-                .map(|root| root.display().to_string())
-                .unwrap_or_else(|| "the package manager's global root".to_string());
-            format!("Installation completed, but {} was not found under {}.", MCP_PACKAGE_NAME, npm_root)
+            let location = match &installed.package_manager {
+                McpPackageManager::Npm => installed
+                    .npm_root
+                    .as_ref()
+                    .map(|root| root.display().to_string())
+                    .unwrap_or_else(|| "the npm global root".to_string()),
+                McpPackageManager::Pnpm { .. } => "the pnpm global directory".to_string(),
+                McpPackageManager::Unknown => "the detected global install".to_string(),
+            };
+            format!("Installation completed, but {} could not be located under {}.", MCP_PACKAGE_NAME, location)
         })?;
         let version = installed.mcp_version.unwrap_or_else(|| "unknown".to_string());
         Ok(format!("Successfully installed @dbx-app/mcp-server@{}", version))
@@ -884,15 +898,25 @@ fn mcp_package_from_command_dir(dir: &Path) -> Option<LocatedMcpPackage> {
         })
     })?;
     let (package_root, package) = mcp_package_from_script(&script_path)?;
+    // A pnpm shim is identified as pnpm when a pnpm command sits next to it, or
+    // when the shim lives inside pnpm's own layout (store links / pnpm-global);
+    // in the latter case fall back to the pnpm on PATH. Anything else (Yarn, Bun,
+    // manual copy) stays unknown/read-only so DBX never runs npm/pnpm management
+    // commands against another manager's install.
     let package_manager = pnpm_command_near(dir)
-        .filter(|command_path| pnpm_package_manageable(&package_root, pnpm_global_dir(command_path).as_deref()))
+        .or_else(|| locate_command("pnpm").map(PathBuf::from))
+        .filter(|_| pnpm_command_near(dir).is_some() || pnpm_located_shim(dir, &script_path))
         .map(|command_path| McpPackageManager::Pnpm { command_path })
         .unwrap_or(McpPackageManager::Unknown);
     Some(LocatedMcpPackage { package_root, package, bin_path: Some(bin_path), package_manager })
 }
 
-fn pnpm_package_manageable(package_root: &Path, pnpm_global_dir: Option<&Path>) -> bool {
-    pnpm_global_dir.is_none_or(|dir| package_root.starts_with(dir))
+/// True when the shim lives in pnpm's own layout, e.g. the store-links dir or an
+/// older `pnpm-global` dir. This is what distinguishes a pnpm shim from a Yarn /
+/// Bun / manual one when pnpm is not sitting right next to it.
+fn pnpm_located_shim(dir: &Path, script_path: &Path) -> bool {
+    let haystack = format!("{} {}", dir.display(), script_path.display()).to_ascii_lowercase();
+    haystack.contains("pnpm-store") || haystack.contains("pnpm-global")
 }
 
 fn mcp_package_from_script(script_path: &Path) -> Option<(PathBuf, McpPackage)> {
@@ -913,17 +937,6 @@ fn pnpm_command_near(dir: &Path) -> Option<PathBuf> {
     [Some(dir), dir.parent()].into_iter().flatten().find_map(|candidate_dir| {
         command_file_names("pnpm").into_iter().map(|name| candidate_dir.join(name)).find(|path| path.is_file())
     })
-}
-
-fn pnpm_global_dir(command_path: &Path) -> Option<PathBuf> {
-    let command = command_path.to_string_lossy();
-    let configured = command_stdout(&command, &["config", "get", "global-dir"]).ok();
-    let value =
-        configured.map(|output| output.trim().to_string()).filter(|value| !value.is_empty() && value != "undefined");
-    if let Some(value) = value {
-        return normalized_reported_path(Path::new(&value));
-    }
-    pnpm_home_from_command(command_path).map(|home| home.join("global"))
 }
 
 fn mcp_native_binary_path(package_root: &Path, npm_root: Option<&Path>) -> Option<PathBuf> {
@@ -1258,7 +1271,7 @@ mod tests {
     use super::{
         canonical_runtime_path, is_mcp_compatible_node_version, mcp_command_for_runtime, mcp_native_binary_path_for,
         mcp_package, mcp_package_from_command_dir, node_script_from_launcher, normalized_reported_path,
-        npm_cli_candidates, parse_minimum_node_version, parse_node_version, pnpm_package_manageable, pnpm_shim_target,
+        npm_cli_candidates, parse_minimum_node_version, parse_node_version, pnpm_located_shim, pnpm_shim_target,
         prefer_runtime, require_managed_mcp_command, resolve_managed_mcp_command, stdout_after_shell_marker,
         McpPackageManager, NodeRuntime, NodeVersion, MCP_MIN_NODE_VERSION_REQUIREMENT, MCP_PACKAGE_NAME,
         MCP_UNKNOWN_MANAGEMENT_HINT, SHELL_COMMAND_MARKER,
@@ -1343,6 +1356,24 @@ mod tests {
     }
 
     #[test]
+    fn pnpm_located_shim_recognizes_store_links_and_legacy_layouts() {
+        let store_links = PathBuf::from(r"D:\Environment\pnpm\pnpm-store\v11\links\@pnpm\exe\10.27.0\hash");
+        let script = store_links.join("dbx-mcp-server.js");
+        assert!(pnpm_located_shim(&store_links, &script));
+        assert!(pnpm_located_shim(
+            &PathBuf::from("/home/pnpm-global/v11/hash"),
+            &PathBuf::from("/home/pnpm-global/v11/hash/node_modules/@dbx-app/mcp-server/bin/dbx-mcp-server.js")
+        ));
+        assert!(!pnpm_located_shim(
+            &PathBuf::from("/opt/yarn/bin"),
+            &PathBuf::from("/opt/yarn/global/node_modules/@dbx-app/mcp-server/bin/dbx-mcp-server.js")
+        ));
+        assert!(!pnpm_located_shim(
+            &PathBuf::from("/usr/local/bin"),
+            &PathBuf::from("/usr/local/lib/node_modules/@dbx-app/mcp-server/bin/dbx-mcp-server.js")
+        ));
+    }
+
     fn pnpm_shim_resolves_inline_script_path() {
         use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -1428,19 +1459,6 @@ mod tests {
     }
 
     #[test]
-    fn pnpm_package_manageable_requires_matching_global_dir() {
-        let home = std::path::Path::new("/env/pnpm");
-        let managed = home.join("global").join("5").join("node_modules").join("@dbx-app").join("mcp-server");
-        let legacy =
-            home.join("pnpm-global").join("v11").join("hash").join("node_modules").join("@dbx-app").join("mcp-server");
-        let global_dir = Some(home.join("global").join("5").as_path());
-
-        assert!(pnpm_package_manageable(&managed, global_dir));
-        assert!(!pnpm_package_manageable(&legacy, global_dir));
-        // Unknown global dir (query failed) falls back to manageable.
-        assert!(pnpm_package_manageable(&legacy, None));
-    }
-
     #[test]
     fn installed_runtime_outranks_an_earlier_runtime_without_mcp() {
         let first = runtime("/runtime/node-26", None);
