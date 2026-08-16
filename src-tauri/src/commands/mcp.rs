@@ -772,6 +772,7 @@ fn run_package_manager_command(
 ) -> Result<CommandOutput, String> {
     let mut command = dbx_core::process::new_std_command(command_path);
     command.args(args);
+    let pnpm_home = pnpm_home_from_command(command_path);
     let mut paths = command_path.parent().into_iter().map(Path::to_path_buf).collect::<Vec<_>>();
     if let Some(node_dir) = node_launcher_path.parent() {
         paths.push(node_dir.to_path_buf());
@@ -779,11 +780,15 @@ fn run_package_manager_command(
     if let Some(current_path) = env::var_os("PATH") {
         paths.extend(env::split_paths(&current_path));
     }
+    if let Some(home) = pnpm_home.as_ref() {
+        // pnpm refuses to run when its global bin directory is not on PATH.
+        paths.insert(0, home.clone());
+    }
     if let Ok(path) = env::join_paths(paths) {
         command.env("PATH", path);
     }
-    if let Some(pnpm_home) = pnpm_home_from_command(command_path) {
-        command.env("PNPM_HOME", pnpm_home);
+    if let Some(home) = pnpm_home {
+        command.env("PNPM_HOME", home);
     }
     command_output_from_process(command)
 }
@@ -879,13 +884,15 @@ fn mcp_package_from_command_dir(dir: &Path) -> Option<LocatedMcpPackage> {
         })
     })?;
     let (package_root, package) = mcp_package_from_script(&script_path)?;
-    // A shim found outside npm's global root is only managed automatically when a
-    // recognizable package manager sits next to it; anything else is treated as
-    // unknown so we never run npm/pnpm commands against another manager's install.
     let package_manager = pnpm_command_near(dir)
+        .filter(|command_path| pnpm_package_manageable(&package_root, pnpm_global_dir(command_path).as_deref()))
         .map(|command_path| McpPackageManager::Pnpm { command_path })
         .unwrap_or(McpPackageManager::Unknown);
     Some(LocatedMcpPackage { package_root, package, bin_path: Some(bin_path), package_manager })
+}
+
+fn pnpm_package_manageable(package_root: &Path, pnpm_global_dir: Option<&Path>) -> bool {
+    pnpm_global_dir.is_none_or(|dir| package_root.starts_with(dir))
 }
 
 fn mcp_package_from_script(script_path: &Path) -> Option<(PathBuf, McpPackage)> {
@@ -906,6 +913,17 @@ fn pnpm_command_near(dir: &Path) -> Option<PathBuf> {
     [Some(dir), dir.parent()].into_iter().flatten().find_map(|candidate_dir| {
         command_file_names("pnpm").into_iter().map(|name| candidate_dir.join(name)).find(|path| path.is_file())
     })
+}
+
+fn pnpm_global_dir(command_path: &Path) -> Option<PathBuf> {
+    let command = command_path.to_string_lossy();
+    let configured = command_stdout(&command, &["config", "get", "global-dir"]).ok();
+    let value =
+        configured.map(|output| output.trim().to_string()).filter(|value| !value.is_empty() && value != "undefined");
+    if let Some(value) = value {
+        return normalized_reported_path(Path::new(&value));
+    }
+    pnpm_home_from_command(command_path).map(|home| home.join("global"))
 }
 
 fn mcp_native_binary_path(package_root: &Path, npm_root: Option<&Path>) -> Option<PathBuf> {
@@ -1240,10 +1258,10 @@ mod tests {
     use super::{
         canonical_runtime_path, is_mcp_compatible_node_version, mcp_command_for_runtime, mcp_native_binary_path_for,
         mcp_package, mcp_package_from_command_dir, node_script_from_launcher, normalized_reported_path,
-        npm_cli_candidates, parse_minimum_node_version, parse_node_version, pnpm_shim_target, prefer_runtime,
-        require_managed_mcp_command, resolve_managed_mcp_command, stdout_after_shell_marker, McpPackageManager,
-        NodeRuntime, NodeVersion, MCP_MIN_NODE_VERSION_REQUIREMENT, MCP_PACKAGE_NAME, MCP_UNKNOWN_MANAGEMENT_HINT,
-        SHELL_COMMAND_MARKER,
+        npm_cli_candidates, parse_minimum_node_version, parse_node_version, pnpm_package_manageable, pnpm_shim_target,
+        prefer_runtime, require_managed_mcp_command, resolve_managed_mcp_command, stdout_after_shell_marker,
+        McpPackageManager, NodeRuntime, NodeVersion, MCP_MIN_NODE_VERSION_REQUIREMENT, MCP_PACKAGE_NAME,
+        MCP_UNKNOWN_MANAGEMENT_HINT, SHELL_COMMAND_MARKER,
     };
     #[cfg(not(windows))]
     use super::{shell_command_script, shell_quote};
@@ -1407,6 +1425,20 @@ mod tests {
         assert!(located_pnpm.package_manager.auto_managed());
 
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn pnpm_package_manageable_requires_matching_global_dir() {
+        let home = std::path::Path::new("/env/pnpm");
+        let managed = home.join("global").join("5").join("node_modules").join("@dbx-app").join("mcp-server");
+        let legacy =
+            home.join("pnpm-global").join("v11").join("hash").join("node_modules").join("@dbx-app").join("mcp-server");
+        let global_dir = Some(home.join("global").join("5").as_path());
+
+        assert!(pnpm_package_manageable(&managed, global_dir));
+        assert!(!pnpm_package_manageable(&legacy, global_dir));
+        // Unknown global dir (query failed) falls back to manageable.
+        assert!(pnpm_package_manageable(&legacy, None));
     }
 
     #[test]
