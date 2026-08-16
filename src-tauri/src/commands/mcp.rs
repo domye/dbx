@@ -107,7 +107,12 @@ impl NodeRuntime {
             })
         });
         let shim_package = launcher_dir.as_deref().and_then(mcp_package_from_command_dir);
-        let package = preferred_mcp_package(npm_package, shim_package, &node_version);
+        // pnpm installs global packages in pnpm's own bin dir instead of npm's global
+        // root; look there when the node-adjacent shim is absent.
+        let pnpm_bin_package = locate_command("pnpm")
+            .and_then(|command| Path::new(&command).parent().map(Path::to_path_buf))
+            .and_then(|dir| mcp_package_from_command_dir(&dir));
+        let package = preferred_mcp_package(npm_package, shim_package.or(pnpm_bin_package), &node_version);
         let package_is_compatible = package
             .as_ref()
             .and_then(|located| located.package.minimum_node_version)
@@ -579,6 +584,13 @@ fn normalize_canonical_path(path: PathBuf) -> PathBuf {
 fn find_npm_cli(node_path: &Path, launcher_dir: Option<&Path>) -> Option<PathBuf> {
     let mut candidates = launcher_dir.map(npm_cli_candidates_in_dir).unwrap_or_default();
     candidates.extend(npm_cli_candidates(node_path));
+    // Bare Node installs (pnpm-managed node, version managers) ship no npm next to
+    // the node binary; fall back to whatever npm is on PATH and resolve its script.
+    if let Some(npm_command) = locate_command("npm") {
+        if let Some(dir) = Path::new(&npm_command).parent() {
+            candidates.extend(npm_cli_candidates_in_dir(dir));
+        }
+    }
     let mut seen = HashSet::new();
 
     candidates.into_iter().find_map(|candidate| {
@@ -616,10 +628,33 @@ fn node_script_from_launcher(path: &Path) -> Option<PathBuf> {
     if let Some(target) = command_shim_target(&canonical) {
         return Some(target);
     }
+    if let Some(target) = pnpm_shim_target(&canonical) {
+        return Some(target);
+    }
     if is_native_npm_launcher(&canonical) || is_shell_script(&canonical) {
         return None;
     }
     Some(canonical)
+}
+
+/// Extracts the real script path embedded in a pnpm launcher shim. pnpm shims
+/// reference the package script inline (for example
+/// `node "%~dp0\..\pnpm-global\v11\<hash>\node_modules\@dbx-app\mcp-server\bin\dbx-mcp-server.js"`
+/// or `$basedir/...`), which the cmd-shim marker parse above does not cover.
+fn pnpm_shim_target(path: &Path) -> Option<PathBuf> {
+    let content = std::fs::read_to_string(path).ok()?;
+    let script = content.split('"').find_map(|token| {
+        let token = token.trim();
+        if !token.ends_with(".js") || !token.contains("node_modules") {
+            return None;
+        }
+        Some(token)
+    })?;
+    let shim_dir = path.parent()?.to_string_lossy().into_owned();
+    let script = script.replace("%~dp0", &shim_dir).replace("$basedir_win", &shim_dir).replace("$basedir", &shim_dir);
+    let target = PathBuf::from(&script);
+    let target = if target.is_absolute() { target } else { path.parent()?.join(target) };
+    canonical_runtime_path(&target)
 }
 
 fn command_shim_target(path: &Path) -> Option<PathBuf> {
@@ -1133,9 +1168,10 @@ mod tests {
     use super::{bash_login_script, prefixed_output_path, NodeRuntimeCandidate};
     use super::{
         canonical_runtime_path, is_mcp_compatible_node_version, mcp_command_for_runtime, mcp_native_binary_path_for,
-        mcp_package, normalized_reported_path, npm_cli_candidates, parse_minimum_node_version, parse_node_version,
-        prefer_runtime, require_managed_mcp_command, resolve_managed_mcp_command, stdout_after_shell_marker,
-        NodeRuntime, NodeVersion, MCP_MIN_NODE_VERSION_REQUIREMENT, MCP_PACKAGE_NAME, SHELL_COMMAND_MARKER,
+        mcp_package, node_script_from_launcher, normalized_reported_path, npm_cli_candidates,
+        parse_minimum_node_version, parse_node_version, pnpm_shim_target, prefer_runtime, require_managed_mcp_command,
+        resolve_managed_mcp_command, stdout_after_shell_marker, NodeRuntime, NodeVersion,
+        MCP_MIN_NODE_VERSION_REQUIREMENT, MCP_PACKAGE_NAME, SHELL_COMMAND_MARKER,
     };
     #[cfg(not(windows))]
     use super::{shell_command_script, shell_quote};
@@ -1214,6 +1250,33 @@ mod tests {
         let _ = std::fs::remove_dir_all(&path);
 
         assert_eq!(normalized_reported_path(&path), Some(path));
+    }
+
+    #[test]
+    fn pnpm_shim_resolves_inline_script_path() {
+        use std::time::{SystemTime, UNIX_EPOCH};
+
+        let nonce = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+        let dir = std::env::temp_dir().join(format!("dbx-pnpm-shim-test-{}-{nonce}", std::process::id()));
+        let bin_dir = dir.join("bin");
+        let script = dir.join("node_modules").join("@dbx-app").join("mcp-server").join("bin").join("dbx-mcp-server.js");
+        std::fs::create_dir_all(script.parent().unwrap()).unwrap();
+        std::fs::write(&script, "// launcher\n").unwrap();
+
+        let sep = std::path::MAIN_SEPARATOR;
+        let shim = bin_dir.join("dbx-mcp-server.CMD");
+        std::fs::create_dir_all(&bin_dir).unwrap();
+        std::fs::write(
+            &shim,
+            format!(
+                "@SETLOCAL\r\nnode  \"%~dp0{sep}..{sep}node_modules{sep}@dbx-app{sep}mcp-server{sep}bin{sep}dbx-mcp-server.js\" %*\r\n"
+            ),
+        )
+        .unwrap();
+
+        assert_eq!(pnpm_shim_target(&shim), canonical_runtime_path(&script));
+        assert_eq!(node_script_from_launcher(&shim), canonical_runtime_path(&script));
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]
