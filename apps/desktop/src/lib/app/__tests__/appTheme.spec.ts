@@ -45,8 +45,10 @@ describe("appTheme custom UI colors", () => {
     // Mid-blue primary takes white text for contrast.
     expect(derived["--primary-foreground"]).toBe("rgb(255 255 255)");
     expect(derived["--sidebar-primary"]).toBe("rgb(43 99 183)");
+    expect(derived["--muted-foreground"]).toBe("rgb(152 152 152)");
     for (const value of Object.values(derived)) {
       expect(value).not.toContain("color-mix");
+      expect(value).not.toContain("NaN");
     }
   });
 
