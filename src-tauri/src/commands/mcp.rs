@@ -113,7 +113,13 @@ impl NodeRuntime {
         let pnpm_bin_package = locate_command("pnpm")
             .and_then(|command| Path::new(&command).parent().map(Path::to_path_buf))
             .and_then(|dir| mcp_package_from_command_dir(&dir));
-        let package = preferred_mcp_package(npm_package, shim_package.or(pnpm_bin_package), &node_version);
+        // Any package manager that puts a dbx-mcp-server shim on PATH (Yarn, Bun,
+        // manually curated dirs) is detected through the shim itself.
+        let path_shim_package = locate_command("dbx-mcp-server")
+            .and_then(|command| Path::new(&command).parent().map(Path::to_path_buf))
+            .and_then(|dir| mcp_package_from_command_dir(&dir));
+        let package =
+            preferred_mcp_package(npm_package, shim_package.or(pnpm_bin_package).or(path_shim_package), &node_version);
         let package_is_compatible = package
             .as_ref()
             .and_then(|located| located.package.minimum_node_version)
