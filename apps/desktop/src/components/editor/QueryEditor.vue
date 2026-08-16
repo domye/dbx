@@ -100,7 +100,7 @@ import {
   type QueryEditorTableReferencePayload,
 } from "@/lib/editor/queryEditorTableDrop";
 import type { SqlHighlighter } from "@/lib/sql/sqlHighlighter";
-import { EDITOR_FONT_FAMILY_CSS_VAR, EDITOR_FONT_SIZE_CSS_VAR, editorThemeAppearanceFor, loadEditorTheme, editorFontTheme, sqlCompletionTheme, sqlSemanticHighlightTheme } from "@/lib/editor/editorThemes";
+import { EDITOR_FONT_FAMILY_CSS_VAR, EDITOR_FONT_SIZE_CSS_VAR, editorDiagnosticColors, editorThemeAppearanceFor, loadEditorTheme, editorFontTheme, sqlCompletionTheme, sqlSemanticHighlightTheme } from "@/lib/editor/editorThemes";
 import { createStatementGutterMarkerDom, shouldShowStatementGutter } from "@/lib/editor/codemirrorStatementGutter";
 import { createQueryEditorSearchKeymap } from "@/lib/editor/queryEditorSearchKeymap";
 import { appendSqlCompletionSpace } from "@/lib/editor/sqlCompletionInsertion";
@@ -677,6 +677,16 @@ function syncEditorFontCssVars(fontSize = liveFontSize.value, fontFamily = setti
   if (!editorRef.value) return;
   editorRef.value.style.setProperty(EDITOR_FONT_SIZE_CSS_VAR, `${clampEditorFontSize(fontSize)}px`);
   editorRef.value.style.setProperty(EDITOR_FONT_FAMILY_CSS_VAR, fontFamily);
+}
+
+// Diagnostics render on the editor surface, so their marker colors follow the
+// resolved editor appearance (which already adapts to custom backgrounds) via
+// editor-scoped variables instead of the app-level warning/destructive tokens.
+function syncEditorDiagnosticCssVars() {
+  if (!editorRef.value) return;
+  const colors = editorDiagnosticColors(editorThemeAppearance());
+  editorRef.value.style.setProperty("--dbx-editor-diagnostic-error", colors.error);
+  editorRef.value.style.setProperty("--dbx-editor-diagnostic-warning", colors.warning);
 }
 
 let pendingFontReconfig: { size: number; family: string } | null = null;
@@ -4467,11 +4477,11 @@ onMounted(async () => {
 
   const diagnosticTheme = EditorView.baseTheme({
     ".cm-sql-error": {
-      textDecoration: "underline wavy var(--destructive)",
+      textDecoration: "underline wavy var(--dbx-editor-diagnostic-error, var(--destructive))",
       textUnderlineOffset: "3px",
     },
     ".cm-sql-semantic-warning": {
-      textDecoration: "underline wavy var(--warning)",
+      textDecoration: "underline wavy var(--dbx-editor-diagnostic-warning, var(--warning))",
       textUnderlineOffset: "3px",
     },
   });
@@ -5288,6 +5298,7 @@ onMounted(async () => {
   restoreEditorViewport();
   syncContextMenuState(view.value);
   syncEditorFontCssVars(liveFontSize.value, initialSettings.fontFamily);
+  syncEditorDiagnosticCssVars();
   registerTableReferenceDropListener();
 
   cachedTables = [];
@@ -5464,6 +5475,7 @@ watch(
       liveFontSize.value = ss.fontSize;
     }
     syncEditorFontCssVars(liveFontSize.value, ss.fontFamily);
+    syncEditorDiagnosticCssVars();
     const themeColors = getCurrentCustomThemeColors();
     const [themeExt] = await Promise.all([loadEditorTheme(ss.theme, editorThemeAppearance(), themeColors, themePalette.value), ss.vimModeEnabled ? ensureCodeMirrorVim() : Promise.resolve(false)]);
     if (!view.value || !codeMirrorTheme || !wordWrapComp || !vimModeComp || !closeBracketsComp || !runGutterComp || !runKeymapComp || !editorViewModule) {

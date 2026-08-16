@@ -683,6 +683,15 @@ export function editorThemeAppearanceFor(appAppearance: AppThemeAppearance, appP
   return appAppearance;
 }
 
+/**
+ * Diagnostic marker colors for the editor surface, chosen from the resolved
+ * editor appearance so error/warning underlines stay legible on the actual
+ * editor background instead of using app-level warning/destructive tokens.
+ */
+export function editorDiagnosticColors(appearance: AppThemeAppearance): { error: string; warning: string } {
+  return appearance === "dark" ? { error: "#f87171", warning: "#fbbf24" } : { error: "#dc2626", warning: "#b45309" };
+}
+
 /** Load a CodeMirror theme extension by theme name. */
 export async function loadEditorTheme(theme: EditorTheme, appAppearance: AppThemeAppearance = "dark", customColors?: CustomThemeColors, appPalette: AppThemePalette = "pearl"): Promise<Extension> {
   const resolvedTheme = resolveEditorTheme(theme, appAppearance, appPalette);

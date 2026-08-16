@@ -3,8 +3,9 @@ import {
   APP_CORNER_STYLE_STORAGE_KEY,
   APP_CUSTOM_UI_COLOR_DEFS,
   APP_CUSTOM_UI_DARK_STORAGE_KEY,
-  APP_CUSTOM_UI_DERIVED_VARS,
+  APP_CUSTOM_UI_DERIVED_VAR_NAMES,
   APP_CUSTOM_UI_STORAGE_KEY,
+  deriveCustomUiColors,
   APP_THEME_PALETTE_CLASS_NAMES,
   APP_THEME_PALETTE_STORAGE_KEY,
   APP_THEME_STORAGE_KEY,
@@ -135,7 +136,7 @@ function applyCustomUiColors() {
       doc.style.removeProperty(def.varName);
       if (def.rgbVarName) doc.style.removeProperty(def.rgbVarName);
     }
-    for (const derived of APP_CUSTOM_UI_DERIVED_VARS) doc.style.removeProperty(derived.varName);
+    for (const name of APP_CUSTOM_UI_DERIVED_VAR_NAMES) doc.style.removeProperty(name);
   };
   if (themePalette.value !== "custom") {
     clear();
@@ -146,7 +147,8 @@ function applyCustomUiColors() {
     doc.style.setProperty(def.varName, color);
     if (def.rgbVarName) doc.style.setProperty(def.rgbVarName, rgbTriplet);
   }
-  for (const derived of APP_CUSTOM_UI_DERIVED_VARS) doc.style.setProperty(derived.varName, derived.value);
+  const derived = deriveCustomUiColors(activeCustomUiColors.value);
+  for (const name of APP_CUSTOM_UI_DERIVED_VAR_NAMES) doc.style.setProperty(name, derived[name]);
 }
 
 function setCustomUiColors(colors: AppCustomUiColors) {

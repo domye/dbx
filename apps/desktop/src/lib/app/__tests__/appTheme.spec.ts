@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { DEFAULT_APP_CUSTOM_UI_COLORS, DEFAULT_APP_CUSTOM_UI_COLORS_DARK, appCustomUiColorValue, customUiAppearance, hexRelativeLuminance, normalizeAppCustomUiColors, wcagContrastRatio } from "@/lib/app/appTheme";
+import { APP_CUSTOM_UI_DERIVED_VAR_NAMES, DEFAULT_APP_CUSTOM_UI_COLORS, DEFAULT_APP_CUSTOM_UI_COLORS_DARK, appCustomUiColorValue, customUiAppearance, deriveCustomUiColors, hexRelativeLuminance, mixHex, normalizeAppCustomUiColors, readableTextOn, wcagContrastRatio } from "@/lib/app/appTheme";
 
 describe("appTheme custom UI colors", () => {
   it("falls back to defaults for missing or invalid values and keeps valid hex", () => {
@@ -31,5 +31,31 @@ describe("appTheme custom UI colors", () => {
     expect(customUiAppearance({ ...DEFAULT_APP_CUSTOM_UI_COLORS, background: "#ffffff" })).toBe("light");
     expect(customUiAppearance({ ...DEFAULT_APP_CUSTOM_UI_COLORS, background: "#123456" })).toBe("dark");
     expect(customUiAppearance({ ...DEFAULT_APP_CUSTOM_UI_COLORS, background: "#e8f0fa" })).toBe("light");
+  });
+
+  it("mixes two hex colors toward the second by weight", () => {
+    expect(mixHex("#000000", "#ffffff", 0.5)).toBe("rgb(128 128 128)");
+    expect(mixHex("#ffffff", "#000000", 1)).toBe("rgb(0 0 0)");
+    expect(mixHex("#ffffff", "#000000", 0)).toBe("rgb(255 255 255)");
+  });
+
+  it("derives every surface with its paired foreground and never uses color-mix", () => {
+    const derived = deriveCustomUiColors({ ...DEFAULT_APP_CUSTOM_UI_COLORS, primary: "#2b63b7" });
+    expect(Object.keys(derived).sort()).toEqual([...APP_CUSTOM_UI_DERIVED_VAR_NAMES].sort());
+    // Mid-blue primary takes white text for contrast.
+    expect(derived["--primary-foreground"]).toBe("rgb(255 255 255)");
+    expect(derived["--sidebar-primary"]).toBe("rgb(43 99 183)");
+    for (const value of Object.values(derived)) {
+      expect(value).not.toContain("color-mix");
+    }
+  });
+
+  it("keeps paired foreground/background combinations readable across primary extremes", () => {
+    for (const primary of ["#111111", "#eeeeee", "#808080", "#2b63b7", "#c0392b"]) {
+      const derived = deriveCustomUiColors({ ...DEFAULT_APP_CUSTOM_UI_COLORS, primary });
+      expect(wcagContrastRatio(derived["--primary-foreground"], derived["--sidebar-primary"]), `primary ${primary}`).toBeGreaterThanOrEqual(3.5);
+    }
+    expect(readableTextOn("#000000")).toBe("#ffffff");
+    expect(readableTextOn("#ffffff")).toBe("#0a0a0a");
   });
 });

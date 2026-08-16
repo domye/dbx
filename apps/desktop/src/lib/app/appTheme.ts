@@ -50,17 +50,87 @@ export const APP_CUSTOM_UI_COLOR_DEFS: readonly AppCustomUiColorDef[] = [
   { key: "sidebar", varName: "--sidebar", labelKey: "settings.customUiSidebar" },
 ];
 
-// The remaining neutral surfaces derive from the chosen colors as tints of
-// background toward foreground, so the theme stays coherent in both light and
-// dark without extra pickers.
-export const APP_CUSTOM_UI_DERIVED_VARS: readonly { varName: string; value: string }[] = [
-  { varName: "--card", value: "color-mix(in srgb, var(--background) 97%, var(--foreground))" },
-  { varName: "--secondary", value: "color-mix(in srgb, var(--background) 94%, var(--foreground))" },
-  { varName: "--muted", value: "color-mix(in srgb, var(--background) 94%, var(--foreground))" },
-  { varName: "--accent", value: "color-mix(in srgb, var(--background) 88%, var(--foreground))" },
-  { varName: "--muted-foreground", value: "color-mix(in srgb, var(--foreground) 58%, var(--background))" },
-  { varName: "--sidebar-foreground", value: "var(--foreground)" },
+// Every surface and its paired foreground is derived from the chosen colors as
+// concrete rgb values (no color-mix dependency, so legacy WebViews work). The
+// pairings are the readability contract: text colors are computed for the
+// surface they sit on (primary/sidebar-primary foregrounds pick black or white
+// by WCAG contrast).
+export const APP_CUSTOM_UI_DERIVED_VAR_NAMES: readonly string[] = [
+  "--card",
+  "--card-foreground",
+  "--popover",
+  "--popover-foreground",
+  "--secondary",
+  "--secondary-foreground",
+  "--muted",
+  "--muted-foreground",
+  "--accent",
+  "--accent-foreground",
+  "--primary-foreground",
+  "--sidebar-foreground",
+  "--sidebar-accent",
+  "--sidebar-accent-foreground",
+  "--sidebar-primary",
+  "--sidebar-primary-foreground",
+  "--sidebar-border",
+  "--sidebar-ring",
+  "--input",
+  "--ring",
 ];
+
+export function mixHex(a: string, b: string, weight: number): string {
+  const pa = parseInt(a.slice(1), 16);
+  const pb = parseInt(b.slice(1), 16);
+  const ar = (pa >> 16) & 255;
+  const ag = (pa >> 8) & 255;
+  const ab = pa & 255;
+  const br = (pb >> 16) & 255;
+  const bg2 = (pb >> 8) & 255;
+  const bb = pb & 255;
+  const r = Math.round(ar + (br - ar) * weight);
+  const g = Math.round(ag + (bg2 - ag) * weight);
+  const bl = Math.round(ab + (bb - ab) * weight);
+  return `rgb(${r} ${g} ${bl})`;
+}
+
+/** Pick white or near-black text for the best contrast on the given background. */
+export function readableTextOn(hex: string): string {
+  return wcagContrastRatio(hex, "#ffffff") >= wcagContrastRatio(hex, "#0a0a0a") ? "#ffffff" : "#0a0a0a";
+}
+
+function rgbValue(hex: string): string {
+  return appCustomUiColorValue(hex).color;
+}
+
+export function deriveCustomUiColors(colors: AppCustomUiColors): Record<string, string> {
+  const { background, foreground, primary, border, sidebar } = colors;
+  const card = mixHex(background, foreground, 0.03);
+  const secondary = mixHex(background, foreground, 0.06);
+  const accent = mixHex(background, foreground, 0.12);
+  const primaryFg = readableTextOn(primary);
+  return {
+    "--card": card,
+    "--card-foreground": rgbValue(foreground),
+    "--popover": card,
+    "--popover-foreground": rgbValue(foreground),
+    "--secondary": secondary,
+    "--secondary-foreground": rgbValue(foreground),
+    "--muted": secondary,
+    "--muted-foreground": rgbValue(mixHex(foreground, background, 0.58)),
+    "--accent": accent,
+    "--accent-foreground": rgbValue(foreground),
+    "--primary-foreground": rgbValue(primaryFg),
+    "--sidebar-foreground": rgbValue(foreground),
+    "--sidebar-accent": mixHex(sidebar, foreground, 0.06),
+    "--sidebar-accent-foreground": rgbValue(foreground),
+    "--sidebar-primary": rgbValue(primary),
+    "--sidebar-primary-foreground": rgbValue(primaryFg),
+    "--sidebar-border": rgbValue(border),
+    "--sidebar-ring": rgbValue(primary),
+    "--input": rgbValue(border),
+    "--ring": rgbValue(primary),
+  };
+}
 
 export type AppThemePaletteOption = {
   value: AppThemePalette;
@@ -135,20 +205,25 @@ export function appCustomUiColorValue(hex: string): { color: string; rgbTriplet:
   return { color: `rgb(${r} ${g} ${b})`, rgbTriplet: `${r}, ${g}, ${b}` };
 }
 
-/** WCAG 2.x relative luminance of a #rrggbb color, 0 (black) .. 1 (white). */
-export function hexRelativeLuminance(hex: string): number {
-  const value = hex.replace("#", "");
-  const toLinear = (channel: string): number => {
-    const c = parseInt(channel, 16) / 255;
-    return c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4);
-  };
-  const r = toLinear(value.slice(0, 2));
-  const g = toLinear(value.slice(2, 4));
-  const b = toLinear(value.slice(4, 6));
-  return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+function rgbChannels(value: string): [number, number, number] {
+  const trimmed = value.trim();
+  const rgbMatch = /^rgb\((\d+)\s+(\d+)\s+(\d+)\)$/.exec(trimmed);
+  if (rgbMatch) return [Number(rgbMatch[1]), Number(rgbMatch[2]), Number(rgbMatch[3])];
+  const hex = trimmed.replace("#", "");
+  return [parseInt(hex.slice(0, 2), 16), parseInt(hex.slice(2, 4), 16), parseInt(hex.slice(4, 6), 16)];
 }
 
-/** WCAG 2.x contrast ratio between two #rrggbb colors, 1 .. 21. */
+/** WCAG 2.x relative luminance of a color, 0 (black) .. 1 (white). Accepts #rrggbb or rgb(r g b). */
+export function hexRelativeLuminance(color: string): number {
+  const [r8, g8, b8] = rgbChannels(color);
+  const toLinear = (channel: number): number => {
+    const c = channel / 255;
+    return c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4);
+  };
+  return 0.2126 * toLinear(r8) + 0.7152 * toLinear(g8) + 0.0722 * toLinear(b8);
+}
+
+/** WCAG 2.x contrast ratio between two colors, 1 .. 21. Accepts #rrggbb or rgb(r g b). */
 export function wcagContrastRatio(a: string, b: string): number {
   const lighter = Math.max(hexRelativeLuminance(a), hexRelativeLuminance(b));
   const darker = Math.min(hexRelativeLuminance(a), hexRelativeLuminance(b));
